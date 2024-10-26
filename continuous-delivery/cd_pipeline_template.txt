@@ -7,7 +7,7 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                git branch: 'master', url: 'https://github.com/carzuza-uni/deploy-ease-backend'
+                git branch: '$branch', url: '$repo_url'
             }
         }
         stage('Build Docker Image') {
