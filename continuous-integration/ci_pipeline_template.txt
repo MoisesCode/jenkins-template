@@ -1,25 +1,63 @@
 pipeline {
     agent any
+
+    environment {
+        GIT_CREDENTIALS = credentials('git-access')
+    }
+
+    parameters {
+        string(name: 'SOURCE_BRANCH', defaultValue: 'feature/addtest', description: 'Nombre de la rama de origen para hacer merge')
+    }
+
     stages {
         stage('Checkout') {
             steps {
-                git branch: '$branch', url: '$repo_url'
+                script {
+                    // Clonar el repositorio usando la rama especificada en SOURCE_BRANCH
+                    checkout([$class: 'GitSCM', 
+                              branches: [[name: "origin/${params.SOURCE_BRANCH}"]], 
+                              userRemoteConfigs: [[url: 'https://github.com/carzuza-uni/test_devops_ci.git', 
+                                                   credentialsId: 'git-access']]
+                    ])
+                }
             }
         }
-        stage('Build') {
+
+        stage('Merge Feature to Main') {
             steps {
-                echo 'Building...'
+                script {
+                    // Realizar el merge dinámico desde la rama especificada a main
+                    sh """
+                    git branch
+                    git checkout main
+                    git merge origin/${params.SOURCE_BRANCH}
+                    """
+                }
             }
         }
-        stage('Test') {
-            steps {
-                echo 'Running tests...'
+    }
+
+    post {
+        success {
+            withCredentials([usernamePassword(credentialsId: 'git-access', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
+                sh """
+                git push https://${GIT_USER}:${GIT_PASS}@github.com/carzuza-uni/test_devops_ci.git main
+                """
             }
+
+            // Notificación Slack al finalizar con éxito
+            slackSend (
+                channel: '#iac-k8s', 
+                color: 'good', 
+                message: "Build completado con éxito. Merge realizado desde '${params.SOURCE_BRANCH}' a 'main'."
+            )
         }
-        stage('Deploy') {
-            steps {
-                echo 'Deploying...'
-            }
+        failure {
+            slackSend (
+                channel: '#iac-k8s', 
+                color: 'danger', 
+                message: "El build ha fallado. Merge realizado desde '${params.SOURCE_BRANCH}'. Revisa el log de errores."
+            )
         }
     }
 }
