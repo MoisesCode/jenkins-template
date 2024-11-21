@@ -2,12 +2,18 @@ pipeline {
     agent any
     environment {
         DOCKER_HUB_REPOSITORY = 'mvilladiegosunicesar/k8s-unicesar'
+        DOCKER_PASSWORD = '${env.DOCKER_PASSWORD}'
         IMAGE_TAG = "${env.BUILD_ID}"
+        GCP_PROJECT_ID = '${gcp_project_id}'
+        GKE_CLUSTER = '$cluster_name'
+        GKE_ZONE = '$cluster_zone'
+        K8S_NAMESPACE = 'default'
+        APP_NAME = '${deploy-ease-backend}'
     }
     stages {
         stage('Checkout') {
             steps {
-                git branch: '$branch', url: '$repo_url'
+                git branch: '$branch', url: '$repo_url', credentialsId: 'github-credentials'
             }
         }
         stage('Build Docker Image') {
@@ -24,6 +30,50 @@ pipeline {
                         docker.image("${DOCKER_HUB_REPOSITORY}:${IMAGE_TAG}").push()
                     }
                 }
+            }
+        }
+        stage('Setup GCP Authentication') {
+            steps {
+                withCredentials([file(credentialsId: 'gcloud-service-account-key', variable: 'GCLOUD_KEY')]) {
+                    sh 'gcloud auth activate-service-account --key-file=$GCLOUD_KEY'
+                    sh "gcloud config set project ${GCP_PROJECT_ID}"
+                    sh "gcloud config set compute/zone ${GKE_ZONE}"
+                }
+            }
+        }
+        stage('Connect to GKE Cluster') {
+            steps {
+                script {
+                    sh "gcloud container clusters get-credentials ${GKE_CLUSTER}"
+                }
+            }
+        }
+        stage('Deploy to GKE using Helm') {
+            steps {
+                script {
+                    // Configura el Secret de Docker para que Helm use las credenciales
+                    sh """
+                    kubectl create secret docker-registry dockerhub-secret \
+                        --docker-username=mvilladiegosunicesar \
+                        --docker-password=${DOCKER_PASSWORD} \
+                        --docker-email=mvilladiegos@unicesar.edu.co \
+                        --namespace=${K8S_NAMESPACE} || true
+                    """
+
+                    // Despliega con Helm usando el Chart y el valor de imagen
+                    sh """
+                    helm upgrade --install ${APP_NAME} ./helm-chart-dir \
+                        --namespace ${K8S_NAMESPACE} \
+                        --set image.repository=${DOCKER_HUB_REPOSITORY} \
+                        --set image.tag=${IMAGE_TAG} \
+                        --set imagePullSecrets[0].name=dockerhub-secret
+                    """
+                }
+            }
+        }
+        stage('Verify Deployment') {
+            steps {
+                sh "kubectl rollout status deployment/${APP_NAME} -n ${K8S_NAMESPACE}"
             }
         }
     }
